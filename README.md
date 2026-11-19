@@ -20,6 +20,17 @@ A tiny Windows tray app (C++/Win32, single statically linked exe) that gives a v
 
 Settings are stored in `HKCU\Software\VisualCopyPlus`.
 
+## Settings window
+
+Open it by clicking the tray icon (or **Settings...** in its right-click menu). Every change applies immediately; changing a flash or toast option shows a preview.
+
+<img src="docs/settings.png" alt="VisualCopy+ settings window" width="452">
+
+## Download
+
+Get `VisualCopyPlus.exe` from the [latest release](../../releases/latest). There is nothing to install: put it anywhere and run it.
+It is not code-signed, so Windows SmartScreen may ask you to confirm the first time (**More info → Run anyway**).
+
 ## Build
 
 Needs MinGW-w64 GCC (`winget install BrechtSanders.WinLibs.POSIX.UCRT`).
