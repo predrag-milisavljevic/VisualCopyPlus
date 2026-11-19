@@ -7,8 +7,8 @@ IDI_APP ICON "app.ico"
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,1,0,0
- PRODUCTVERSION 1,1,0,0
+ FILEVERSION 1,2,0,0
+ PRODUCTVERSION 1,2,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -20,11 +20,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "VisualCopy+"
-            VALUE "FileVersion", "1.1.0"
+            VALUE "FileVersion", "1.2.0"
             VALUE "InternalName", "VisualCopyPlus"
             VALUE "OriginalFilename", "VisualCopyPlus.exe"
             VALUE "ProductName", "VisualCopy+"
-            VALUE "ProductVersion", "1.1.0"
+            VALUE "ProductVersion", "1.2.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -33,7 +33,7 @@ BEGIN
     END
 END
 
-IDD_SETTINGS DIALOGEX 0, 0, 300, 386
+IDD_SETTINGS DIALOGEX 0, 0, 300, 400
 STYLE DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 EXSTYLE WS_EX_APPWINDOW
 CAPTION "VisualCopy+ Settings"
@@ -54,33 +54,42 @@ BEGIN
     CONTROL         "", IDC_OPACITY, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | TBS_BOTH | WS_TABSTOP, 52, 73, 200, 16
     RTEXT           "70%", IDC_OPACITY_LABEL, 254, 77, 30, 8
 
-    GROUPBOX        "Toast", IDC_STATIC, 7, 104, 286, 46
+    GROUPBOX        "Toast", IDC_STATIC, 7, 104, 286, 80
     AUTOCHECKBOX    "Show a toast with what was copied", IDC_TOAST_ENABLE, 15, 117, 160, 10
-    AUTOCHECKBOX    "Include content preview (text, thumbnail, file names)", IDC_TOAST_PREVIEW, 15, 132, 190, 10
     LTEXT           "Show for:", IDC_STATIC, 196, 118, 34, 8
     COMBOBOX        IDC_TOAST_DURATION, 232, 116, 52, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    AUTOCHECKBOX    "Include content preview (text, thumbnail, file names)", IDC_TOAST_PREVIEW, 15, 132, 190, 10
+    LTEXT           "Position:", IDC_STATIC, 15, 150, 38, 8
+    COMBOBOX        IDC_TOAST_POS, 56, 148, 100, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Layout:", IDC_STATIC, 168, 150, 30, 8
+    COMBOBOX        IDC_TOAST_LAYOUT, 200, 148, 84, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Toast for:", IDC_STATIC, 15, 168, 38, 8
+    AUTOCHECKBOX    "Text", IDC_TOAST_TEXT, 56, 167, 36, 10
+    AUTOCHECKBOX    "Images", IDC_TOAST_IMAGES, 96, 167, 42, 10
+    AUTOCHECKBOX    "Files", IDC_TOAST_FILES, 142, 167, 36, 10
+    AUTOCHECKBOX    "Other formats", IDC_TOAST_OTHER, 182, 167, 70, 10
 
-    GROUPBOX        "Sound", IDC_STATIC, 7, 156, 286, 34
-    AUTOCHECKBOX    "Play a sound", IDC_SOUND_ENABLE, 15, 171, 60, 10
-    COMBOBOX        IDC_SOUND_KIND, 78, 169, 114, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "Browse...", IDC_SOUND_BROWSE, 196, 168, 44, 14
-    PUSHBUTTON      "Play", IDC_SOUND_PLAY, 244, 168, 40, 14
+    GROUPBOX        "Sound", IDC_STATIC, 7, 190, 286, 34
+    AUTOCHECKBOX    "Play a sound", IDC_SOUND_ENABLE, 15, 205, 60, 10
+    COMBOBOX        IDC_SOUND_KIND, 78, 203, 114, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Browse...", IDC_SOUND_BROWSE, 196, 202, 44, 14
+    PUSHBUTTON      "Play", IDC_SOUND_PLAY, 244, 202, 40, 14
 
-    GROUPBOX        "Smart behavior", IDC_STATIC, 7, 196, 286, 46
-    AUTOCHECKBOX    "Say ""cut"" when Ctrl+X was used", IDC_LABEL_CUT, 15, 209, 140, 10
-    AUTOCHECKBOX    "Warn when Ctrl+C copies nothing", IDC_WARN_NOCOPY, 160, 209, 128, 10
-    AUTOCHECKBOX    "Stay quiet in full-screen apps", IDC_QUIET_FULLSCREEN, 15, 225, 140, 10
-    AUTOCHECKBOX    "Skip repeated identical copies", IDC_SKIP_REPEATS, 160, 225, 128, 10
+    GROUPBOX        "Smart behavior", IDC_STATIC, 7, 230, 286, 46
+    AUTOCHECKBOX    "Say ""cut"" when Ctrl+X was used", IDC_LABEL_CUT, 15, 243, 140, 10
+    AUTOCHECKBOX    "Warn when Ctrl+C copies nothing", IDC_WARN_NOCOPY, 160, 243, 128, 10
+    AUTOCHECKBOX    "Stay quiet in full-screen apps", IDC_QUIET_FULLSCREEN, 15, 259, 140, 10
+    AUTOCHECKBOX    "Skip repeated identical copies", IDC_SKIP_REPEATS, 160, 259, 128, 10
 
-    GROUPBOX        "Ignored apps (matched by the clipboard owner's process)", IDC_STATIC, 7, 248, 286, 106
-    LISTBOX         IDC_IGNORE_LIST, 15, 261, 180, 72, LBS_NOTIFY | LBS_SORT | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER | WS_TABSTOP
-    PUSHBUTTON      "Remove", IDC_IGNORE_REMOVE, 200, 261, 84, 14
-    PUSHBUTTON      "Browse for .exe...", IDC_IGNORE_BROWSE, 200, 279, 84, 14
-    PUSHBUTTON      "Ignore last source", IDC_IGNORE_LAST, 200, 297, 84, 14
-    EDITTEXT        IDC_IGNORE_EDIT, 15, 336, 180, 13, ES_AUTOHSCROLL
-    PUSHBUTTON      "Add", IDC_IGNORE_ADD, 200, 335, 84, 14
+    GROUPBOX        "Ignored apps (matched by the clipboard owner's process)", IDC_STATIC, 7, 282, 286, 86
+    LISTBOX         IDC_IGNORE_LIST, 15, 295, 180, 52, LBS_NOTIFY | LBS_SORT | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER | WS_TABSTOP
+    PUSHBUTTON      "Remove", IDC_IGNORE_REMOVE, 200, 295, 84, 14
+    PUSHBUTTON      "Browse for .exe...", IDC_IGNORE_BROWSE, 200, 313, 84, 14
+    PUSHBUTTON      "Ignore last source", IDC_IGNORE_LAST, 200, 331, 84, 14
+    EDITTEXT        IDC_IGNORE_EDIT, 15, 350, 180, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "Add", IDC_IGNORE_ADD, 200, 349, 84, 14
 
-    AUTOCHECKBOX    "Start with Windows", IDC_AUTOSTART, 12, 366, 100, 10
-    PUSHBUTTON      "Test", IDC_TEST, 186, 363, 50, 15
-    PUSHBUTTON      "Close", IDCANCEL, 240, 363, 50, 15
+    AUTOCHECKBOX    "Start with Windows", IDC_AUTOSTART, 12, 380, 100, 10
+    PUSHBUTTON      "Test", IDC_TEST, 186, 377, 50, 15
+    PUSHBUTTON      "Close", IDCANCEL, 240, 377, 50, 15
 END

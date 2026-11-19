@@ -31,6 +31,12 @@
 #define IDC_WARN_NOCOPY         1026
 #define IDC_QUIET_FULLSCREEN    1027
 #define IDC_SKIP_REPEATS        1028
+#define IDC_TOAST_POS           1029
+#define IDC_TOAST_LAYOUT        1030
+#define IDC_TOAST_TEXT          1031
+#define IDC_TOAST_IMAGES        1032
+#define IDC_TOAST_FILES         1033
+#define IDC_TOAST_OTHER         1034
 
 #ifndef IDC_STATIC
 #define IDC_STATIC              -1

@@ -3,6 +3,7 @@
 
 // Custom-drawn toast: GDI draws content onto an opaque DIB, then a per-pixel pass applies
 // the rounded-rect mask, a 1px border and a soft drop shadow (premultiplied alpha).
+// Clicking the toast opens Windows clipboard history (Win+V); the x in the corner closes it.
 
 static HWND s_wnd;
 static HDC s_dc;
@@ -12,8 +13,9 @@ static Phase s_phase = P_HIDDEN;
 static ULONGLONG s_t0;
 static DWORD s_hold;
 static BYTE s_alpha, s_outFrom;
+static RECT s_closeRc;          // close button, in window coordinates
 static const DWORD FADE_IN = 110, FADE_OUT = 220;
-static const DWORD HOLD_MS[] = {1500, 2500, 4000, 6000};
+static const DWORD HOLD_MS[] = {500, 1500, 2500, 4000, 6000};
 
 static void FreeSurface() {
     if (s_dc) {
@@ -42,6 +44,16 @@ static void BeginFadeOut() {
     s_phase = P_OUT;
     s_outFrom = s_alpha;
     s_t0 = GetTickCount64();
+}
+
+static void OpenClipboardHistory() {
+    INPUT in[4] = {};
+    for (auto& i : in) i.type = INPUT_KEYBOARD;
+    in[0].ki.wVk = VK_LWIN;
+    in[1].ki.wVk = 'V';
+    in[2].ki.wVk = 'V';   in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[3].ki.wVk = VK_LWIN; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, in, sizeof(INPUT));
 }
 
 static void Tick() {
@@ -75,10 +87,21 @@ static void Tick() {
 static LRESULT CALLBACK ToastProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_TIMER: Tick(); return 0;
-    case WM_LBUTTONUP:
+    case WM_LBUTTONUP: {
+        POINT pt{(short)LOWORD(l), (short)HIWORD(l)};
+        bool onClose = PtInRect(&s_closeRc, pt) != FALSE;
+        Hide();
+        if (!onClose) OpenClipboardHistory();
+        return 0;
+    }
     case WM_RBUTTONUP:
         BeginFadeOut();
         return 0;
+    case WM_SETCURSOR: {
+        POINT pt; GetCursorPos(&pt); ScreenToClient(h, &pt);
+        SetCursor(LoadCursorW(nullptr, PtInRect(&s_closeRc, pt) ? IDC_ARROW : IDC_HAND));
+        return TRUE;
+    }
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_DPICHANGED: return 0;
     }
@@ -90,7 +113,6 @@ static void EnsureWindow() {
     WNDCLASSEXW wc{sizeof(wc)};
     wc.lpfnWndProc = ToastProc;
     wc.hInstance = g_hInst;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"VisualCopyPlus.Toast";
     RegisterClassExW(&wc);
     s_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -130,6 +152,14 @@ static int LineHeight(HDC dc, HFONT f) {
     GetTextMetricsW(dc, &tm);
     SelectObject(dc, old);
     return tm.tmHeight;
+}
+
+static int TextWidth(HDC dc, HFONT f, const std::wstring& s) {
+    HGDIOBJ old = SelectObject(dc, f);
+    SIZE sz{};
+    GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
+    SelectObject(dc, old);
+    return sz.cx;
 }
 
 // Word-wraps text into at most maxLines lines. The last line carries the remainder so the
@@ -178,18 +208,28 @@ static std::wstring Plural(size_t n, const wchar_t* one, const wchar_t* many) {
     return FormatNumber(n) + L" " + (n == 1 ? one : many);
 }
 
+static void FillRoundTile(HDC dc, const RECT& r, COLORREF c, int round) {
+    HBRUSH b = CreateSolidBrush(c);
+    HGDIOBJ oldBrush = SelectObject(dc, b);
+    HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    RoundRect(dc, r.left, r.top, r.right + 1, r.bottom + 1, round, round);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(b);
+}
+
 void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
-    RECT anchor;
+    // ---- which monitor, and what to anchor to
+    POINT cursor;
+    GetCursorPos(&cursor);
+    const int pos = std::min(std::max(g_settings.toastPosition, 0), TOAST_POSITION_COUNT - 1);
     MONITORINFO mi{sizeof(mi)};
-    if (anchorIn) {
-        anchor = *anchorIn;
-        GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &mi);
-    } else {
-        POINT pt; GetCursorPos(&pt);
-        GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mi);
-        anchor = mi.rcWork;
-    }
-    const UINT dpi = DpiForRect(anchor);
+    if (pos == TOAST_NEAR_CURSOR || !anchorIn)
+        GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &mi);
+    else
+        GetMonitorInfoW(MonitorFromRect(anchorIn, MONITOR_DEFAULTTONEAREST), &mi);
+    const RECT anchor = anchorIn ? *anchorIn : mi.rcWork;
+    const UINT dpi = DpiForRect(mi.rcMonitor);
     auto S = [&](double v) { return (int)std::lround(v * dpi / 96.0); };
 
     const bool dark = IsDarkMode();
@@ -198,12 +238,17 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     const COLORREF fg2    = dark ? RGB(168, 168, 168) : RGB(96, 96, 96);
     const COLORREF border = dark ? RGB(72, 72, 72) : RGB(214, 214, 214);
     const COLORREF accent = ci.kind == CLIP_FAILED ? WARNING_COLOR : GetFlashColor();
-    const wchar_t* verb = ci.isCut ? L" cut" : L" copied";
     const COLORREF accentFg = dark ? MixColor(accent, RGB(255, 255, 255), 0.35f) : MixColor(accent, RGB(0, 0, 0), 0.12f);
     const COLORREF tile   = MixColor(bg, accent, dark ? 0.24f : 0.14f);
+    const wchar_t* verb = ci.isCut ? L" cut" : L" copied";
 
-    const bool preview = g_settings.toastPreview;
-    const int W = S(344), P = S(14), gap = S(12), margin = S(16), radius = S(8);
+    const bool compact = g_settings.toastCompact;
+    const bool preview = g_settings.toastPreview && !compact;
+    const int W = compact ? S(330) : S(344);
+    const int P = compact ? S(10) : S(14);
+    const int gap = compact ? S(10) : S(12);
+    const int margin = S(16), radius = S(8);
+    const int closeSz = S(22);
 
     // ---- content strings
     std::wstring title, meta, glyph;
@@ -222,13 +267,12 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         meta = FormatNumber(ci.imgW) + L" × " + FormatNumber(ci.imgH) + L" px";
         break;
     case CLIP_FILES: {
-        glyph = L"";
+        glyph = ci.isCut ? L"" : L"";
         size_t n = ci.fileCount;
         if (ci.typesKnown && ci.folderCount == 0) title = Plural(n, L"file", L"files");
         else if (ci.typesKnown && ci.plainFileCount == 0) title = Plural(n, L"folder", L"folders");
         else title = Plural(n, L"item", L"items");
         title += verb;
-        if (ci.isCut) glyph = L"";
         if (ci.typesKnown && ci.folderCount && ci.plainFileCount)
             meta = Plural(ci.plainFileCount, L"file", L"files") + L", " + Plural(ci.folderCount, L"folder", L"folders");
         if (preview) {
@@ -248,6 +292,11 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         glyph = L"";
         meta = L"Preview hidden (sensitive)";
         break;
+    case CLIP_STATUS:
+        title = ci.formatName;
+        glyph = g_settings.paused ? L"" : L"";
+        meta = ci.snippet;
+        break;
     default:
         title = ci.isCut ? L"Cut" : L"Copied";
         glyph = ci.isCut ? L"" : L"";
@@ -257,21 +306,24 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     if (!ci.appName.empty()) meta = meta.empty() ? ci.appName : meta + L"  ·  " + ci.appName;
 
     // ---- fonts & measuring
-    HFONT fTitle = MakeFont(S(14.5), FW_SEMIBOLD, L"Segoe UI");
-    HFONT fMeta  = MakeFont(S(12), FW_NORMAL, L"Segoe UI");
+    HFONT fTitle = MakeFont(compact ? S(13.5) : S(14.5), FW_SEMIBOLD, L"Segoe UI");
+    HFONT fMeta  = MakeFont(compact ? S(12.5) : S(12), FW_NORMAL, L"Segoe UI");
     HFONT fBody  = MakeFont(S(13), FW_NORMAL, L"Segoe UI");
-    HFONT fGlyph = MakeFont(S(18), FW_NORMAL, IconFontFace());
+    HFONT fGlyph = MakeFont(compact ? S(15) : S(18), FW_NORMAL, IconFontFace());
+    HFONT fClose = MakeFont(S(9), FW_NORMAL, IconFontFace());
 
+    const int tileSz = compact ? S(28) : S(36);
     bool thumb = ci.kind == CLIP_IMAGE && preview && !ci.dib.empty() && ci.imgW > 0 && ci.imgH > 0;
-    int iconW = S(36), iconH = S(36);
+    int iconW = tileSz, iconH = tileSz;
     if (thumb) {
         double sc = std::min(S(96) / (double)ci.imgW, S(72) / (double)ci.imgH);
         sc = std::min(sc, 4.0);
         iconW = std::max(1, (int)std::lround(ci.imgW * sc));
         iconH = std::max(1, (int)std::lround(ci.imgH * sc));
     }
-    const int textX = P + std::max(iconW, S(36)) + gap;
-    const int textW = W - textX - P;
+    const int iconBoxW = std::max(iconW, tileSz);
+    const int textX = P + iconBoxW + gap;
+    const int textW = W - textX - P - (compact ? S(16) : S(12));   // leave room for the close button
 
     HDC screen = GetDC(nullptr);
     HDC mdc = CreateCompatibleDC(screen);
@@ -288,7 +340,8 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         bodyLines = fileLines;
     }
     const int bodyH = (int)bodyLines.size() * bodyLH;
-    const int contentH = titleH + (metaH ? S(1) + metaH : 0) + (bodyH ? S(7) + bodyH : 0);
+    const int contentH = compact ? std::max(titleH, metaH)
+                                 : titleH + (metaH ? S(1) + metaH : 0) + (bodyH ? S(7) + bodyH : 0);
     const int H = P * 2 + std::max(contentH, iconH);
 
     // ---- surface
@@ -303,10 +356,13 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     void* bitsV = nullptr;
     HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bitsV, nullptr, 0);
     ReleaseDC(nullptr, screen);
+    auto freeFonts = [&] {
+        DeleteObject(fTitle); DeleteObject(fMeta); DeleteObject(fBody); DeleteObject(fGlyph); DeleteObject(fClose);
+    };
     if (!bmp || !bitsV) {
         if (bmp) DeleteObject(bmp);
         DeleteDC(mdc);
-        DeleteObject(fTitle); DeleteObject(fMeta); DeleteObject(fBody); DeleteObject(fGlyph);
+        freeFonts();
         return;
     }
     HBITMAP oldBmp = (HBITMAP)SelectObject(mdc, bmp);
@@ -319,9 +375,8 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     SetBkMode(mdc, TRANSPARENT);
 
     const int top = oy + P;
-    const int iconBoxW = std::max(iconW, S(36));
-    int iconY = contentH >= iconH ? top : oy + (H - iconH) / 2;
-    int textY = contentH >= iconH ? top : oy + (H - contentH) / 2;
+    const int iconY = contentH >= iconH ? top : oy + (H - iconH) / 2;
+    const int textY = contentH >= iconH ? top : oy + (H - contentH) / 2;
 
     if (thumb) {
         int ix = ox + P + (iconBoxW - iconW) / 2;
@@ -334,46 +389,66 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         FrameRect(mdc, &fr, bb);
         DeleteObject(bb);
     } else {
-        RECT ir{ox + P, iconY, ox + P + S(36), iconY + S(36)};
-        HBRUSH tb = CreateSolidBrush(tile);
-        HGDIOBJ oldBrush = SelectObject(mdc, tb);
-        HGDIOBJ oldPen = SelectObject(mdc, GetStockObject(NULL_PEN));
-        RoundRect(mdc, ir.left, ir.top, ir.right + 1, ir.bottom + 1, S(10), S(10));
-        SelectObject(mdc, oldPen);
-        SelectObject(mdc, oldBrush);
-        DeleteObject(tb);
+        RECT ir{ox + P, iconY, ox + P + tileSz, iconY + tileSz};
+        FillRoundTile(mdc, ir, tile, compact ? S(8) : S(10));
         SelectObject(mdc, fGlyph);
         SetTextColor(mdc, accentFg);
         DrawTextW(mdc, glyph.c_str(), -1, &ir, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     const UINT lineFlags = DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | DT_LEFT | DT_TOP;
-    int y = textY;
-    RECT r{ox + textX, y, ox + textX + textW, y + titleH};
-    SelectObject(mdc, fTitle);
-    SetTextColor(mdc, fg);
-    DrawTextW(mdc, title.c_str(), -1, &r, lineFlags);
-    y += titleH;
-    if (metaH) {
-        y += S(1);
-        r = {ox + textX, y, ox + textX + textW, y + metaH};
-        SelectObject(mdc, fMeta);
-        SetTextColor(mdc, fg2);
-        DrawTextW(mdc, meta.c_str(), -1, &r, lineFlags);
-        y += metaH;
-    }
-    if (bodyH) {
-        y += S(7);
-        SelectObject(mdc, fBody);
-        SetTextColor(mdc, dark ? RGB(222, 222, 222) : RGB(48, 48, 48));
-        for (size_t i = 0; i < bodyLines.size(); i++) {
-            bool moreLine = ci.kind == CLIP_FILES && i + 1 == bodyLines.size() && bodyLines[i].rfind(L"+ ", 0) == 0;
-            if (moreLine) SetTextColor(mdc, fg2);
-            r = {ox + textX, y, ox + textX + textW, y + bodyLH};
-            DrawTextW(mdc, bodyLines[i].c_str(), -1, &r, lineFlags | DT_EXPANDTABS);
-            y += bodyLH;
+    if (compact) {
+        // title and meta on one line, vertically centred with the icon
+        int y = oy + (H - titleH) / 2;
+        int tw = std::min(TextWidth(mdc, fTitle, title), textW);
+        RECT r{ox + textX, y, ox + textX + tw, y + titleH};
+        SelectObject(mdc, fTitle);
+        SetTextColor(mdc, fg);
+        DrawTextW(mdc, title.c_str(), -1, &r, lineFlags);
+        if (metaH) {
+            int mx = ox + textX + tw + S(8);
+            int my = oy + (H - metaH) / 2 + S(1);
+            r = {mx, my, ox + textX + textW, my + metaH};
+            SelectObject(mdc, fMeta);
+            SetTextColor(mdc, fg2);
+            if (r.right > r.left) DrawTextW(mdc, meta.c_str(), -1, &r, lineFlags);
+        }
+    } else {
+        int y = textY;
+        RECT r{ox + textX, y, ox + textX + textW, y + titleH};
+        SelectObject(mdc, fTitle);
+        SetTextColor(mdc, fg);
+        DrawTextW(mdc, title.c_str(), -1, &r, lineFlags);
+        y += titleH;
+        if (metaH) {
+            y += S(1);
+            r = {ox + textX, y, ox + textX + textW, y + metaH};
+            SelectObject(mdc, fMeta);
+            SetTextColor(mdc, fg2);
+            DrawTextW(mdc, meta.c_str(), -1, &r, lineFlags);
+            y += metaH;
+        }
+        if (bodyH) {
+            y += S(7);
+            SelectObject(mdc, fBody);
+            SetTextColor(mdc, dark ? RGB(222, 222, 222) : RGB(48, 48, 48));
+            for (size_t i = 0; i < bodyLines.size(); i++) {
+                bool moreLine = ci.kind == CLIP_FILES && i + 1 == bodyLines.size() && bodyLines[i].rfind(L"+ ", 0) == 0;
+                if (moreLine) SetTextColor(mdc, fg2);
+                r = {ox + textX, y, ox + textX + textW, y + bodyLH};
+                DrawTextW(mdc, bodyLines[i].c_str(), -1, &r, lineFlags | DT_EXPANDTABS);
+                y += bodyLH;
+            }
         }
     }
+
+    // close button (top-right; vertically centred in compact mode)
+    const int cx0 = ox + W - S(6) - closeSz;
+    const int cy0 = compact ? oy + (H - closeSz) / 2 : oy + S(6);
+    s_closeRc = {cx0, cy0, cx0 + closeSz, cy0 + closeSz};
+    SelectObject(mdc, fClose);
+    SetTextColor(mdc, fg2);
+    DrawTextW(mdc, L"", -1, &s_closeRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiFlush();
 
     // ---- alpha: rounded mask + 1px border + drop shadow
@@ -401,20 +476,39 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
                 ((DWORD)(g_ * cov + 0.5f) << 8) | (DWORD)(b_ * cov + 0.5f);
         }
     }
+    freeFonts();
 
-    DeleteObject(fTitle); DeleteObject(fMeta); DeleteObject(fBody); DeleteObject(fGlyph);
-
-    // ---- placement: bottom-centre inside the source window, else below it; clamp to work area
-    const int gapEdge = S(24), pad = S(8);
-    int x = (anchor.left + anchor.right) / 2 - W / 2;
-    int yPos;
-    if (!anchorIn) yPos = anchor.bottom - H - gapEdge;
-    else if (anchor.bottom - anchor.top >= H + 2 * gapEdge) yPos = anchor.bottom - H - gapEdge;
-    else yPos = anchor.bottom + pad;
+    // ---- placement
     const RECT& wa = mi.rcWork;
+    const int edge = S(16), pad = S(8);
+    int x, y;
+    switch (pos) {
+    case TOAST_NEAR_CURSOR:
+        x = cursor.x + S(14);
+        y = cursor.y + S(22);
+        if (y + H > wa.bottom - pad) y = cursor.y - H - S(14);     // flip above the pointer
+        if (x + W > wa.right - pad) x = cursor.x - W - S(14);      // flip to the left
+        break;
+    case TOAST_BOTTOM_RIGHT:
+        x = wa.right - W - edge;
+        y = wa.bottom - H - edge;
+        break;
+    case TOAST_TOP_RIGHT:
+        x = wa.right - W - edge;
+        y = wa.top + edge;
+        break;
+    default: {
+        // bottom-centre inside the source window, else below it
+        const int gapEdge = S(24);
+        x = (anchor.left + anchor.right) / 2 - W / 2;
+        if (!anchorIn || anchor.bottom - anchor.top >= H + 2 * gapEdge) y = anchor.bottom - H - gapEdge;
+        else y = anchor.bottom + pad;
+        if (y + H > wa.bottom - pad) y = std::max((int)wa.top + pad, (int)anchor.top - H - pad);
+        break;
+    }
+    }
     x = std::max((int)wa.left + pad, std::min(x, (int)wa.right - W - pad));
-    if (yPos + H > wa.bottom - pad) yPos = std::max((int)wa.top + pad, (int)anchor.top - H - pad);
-    yPos = std::max((int)wa.top + pad, std::min(yPos, (int)wa.bottom - H - pad));
+    y = std::max((int)wa.top + pad, std::min(y, (int)wa.bottom - H - pad));
 
     // ---- show
     EnsureWindow();
@@ -423,7 +517,7 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     s_dc = mdc; s_bmp = bmp; s_oldBmp = oldBmp;
 
     bool wasVisible = s_phase == P_HOLD || s_phase == P_IN;
-    POINT dst{x - margin, yPos - margin}, src{0, 0};
+    POINT dst{x - margin, y - margin}, src{0, 0};
     SIZE sz{BW, BH};
     BYTE a0 = wasVisible ? 255 : 0;
     BLENDFUNCTION bf{AC_SRC_OVER, 0, a0, AC_SRC_ALPHA};
@@ -431,7 +525,7 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     s_alpha = a0;
     SetWindowPos(s_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     s_phase = wasVisible ? P_HOLD : P_IN;
-    s_hold = HOLD_MS[std::min(3, std::max(0, g_settings.toastDuration))];
+    s_hold = HOLD_MS[std::min(4, std::max(0, g_settings.toastDuration))];
     s_t0 = GetTickCount64();
     SetTimer(s_wnd, 1, 15, nullptr);
 }

@@ -31,6 +31,9 @@
 // Values are persisted: append new styles at the end.
 enum FlashStyle { FLASH_BORDER = 0, FLASH_GLOW, FLASH_FILL, FLASH_CORNERS, FLASH_TOPBAR, FLASH_BOTTOMBAR, FLASH_STYLE_COUNT };
 enum SoundKind  { SOUND_TICK = 0, SOUND_SYSTEM, SOUND_CUSTOM, SOUND_KIND_COUNT };
+enum ToastPosition { TOAST_NEAR_WINDOW = 0, TOAST_NEAR_CURSOR, TOAST_BOTTOM_RIGHT, TOAST_TOP_RIGHT, TOAST_POSITION_COUNT };
+
+#define PAUSE_HOTKEY_TEXT L"Ctrl+Alt+Shift+V"
 
 struct Settings {
     bool flashEnabled   = true;
@@ -42,7 +45,7 @@ struct Settings {
     bool animate        = true;
     bool toastEnabled   = true;
     bool toastPreview   = true;
-    int  toastDuration  = 1;            // index into toast hold table
+    int  toastDuration  = 2;            // index into toast hold table: 0.5, 1.5, 2.5, 4, 6 s
     bool soundEnabled   = false;
     int  soundKind      = SOUND_TICK;
     std::wstring soundFile;
@@ -52,9 +55,15 @@ struct Settings {
     bool warnNoCopy     = true;   // warn when Ctrl+C / Ctrl+Insert left the clipboard unchanged
     bool quietFullscreen = true;  // no cues while a full-screen app or presentation is running
     bool skipRepeats    = true;   // ignore identical re-writes and bursts not triggered by a key press
+    int  toastPosition  = TOAST_NEAR_WINDOW;
+    bool toastCompact   = false;  // single line instead of the detailed card
+    bool toastForText   = true;   // per content type: show a toast (the flash is unaffected)
+    bool toastForImages = true;
+    bool toastForFiles  = true;
+    bool toastForOther  = true;
 };
 
-enum ClipKind { CLIP_TEXT, CLIP_IMAGE, CLIP_FILES, CLIP_SENSITIVE, CLIP_OTHER, CLIP_FAILED };
+enum ClipKind { CLIP_TEXT, CLIP_IMAGE, CLIP_FILES, CLIP_SENSITIVE, CLIP_OTHER, CLIP_FAILED, CLIP_STATUS };
 
 #define WARNING_COLOR RGB(240, 120, 20)
 
@@ -100,6 +109,7 @@ void AddIgnored(const std::wstring& exe);
 // main.cpp
 void RunDemo(HWND target);
 void UpdateKeyHook();
+void SetPaused(bool paused, bool announce);
 
 // overlay.cpp
 void Overlay_Flash(HWND target, const COLORREF* overrideColor = nullptr);
@@ -123,6 +133,7 @@ std::wstring FormatNumber(size_t n);
 UINT         DpiForRect(const RECT& rc);
 bool         GetVisualRect(HWND hwnd, RECT* rc);
 bool         IsDesktopWindowClass(HWND hwnd);
+void         ApplyDarkTitleBar(HWND hwnd);
 
 // Signed distance from point (px,py) (relative to the rect centre) to a rounded
 // rectangle with half extents (hx,hy) and corner radius r. Negative inside.

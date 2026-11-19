@@ -111,6 +111,13 @@ bool GetVisualRect(HWND hwnd, RECT* rc) {
     return rc->right > rc->left && rc->bottom > rc->top;
 }
 
+void ApplyDarkTitleBar(HWND hwnd) {
+    BOOL dark = IsDarkMode() ? TRUE : FALSE;
+    // DWMWA_USE_IMMERSIVE_DARK_MODE is 20 on Windows 10 20H1+ / 11 (19 on older Windows 10 builds).
+    if (FAILED(DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark))))
+        DwmSetWindowAttribute(hwnd, 19, &dark, sizeof(dark));
+}
+
 bool IsDesktopWindowClass(HWND hwnd) {
     wchar_t cls[64] = {};
     GetClassNameW(hwnd, cls, 64);

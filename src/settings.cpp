@@ -41,7 +41,16 @@ void LoadSettings() {
     s.animate       = D(L"Animate", s.animate) != 0;
     s.toastEnabled  = D(L"ToastEnabled", s.toastEnabled) != 0;
     s.toastPreview  = D(L"ToastPreview", s.toastPreview) != 0;
-    s.toastDuration = std::min<int>(D(L"ToastDuration", s.toastDuration), 3);
+    // "ToastHold" indexes {0.5, 1.5, 2.5, 4, 6} s; older builds stored "ToastDuration" without the 0.5 s entry.
+    DWORD hold = D(L"ToastHold", 0xFFFFFFFF);
+    if (hold == 0xFFFFFFFF) hold = D(L"ToastDuration", s.toastDuration - 1) + 1;
+    s.toastDuration = std::min<int>(hold, 4);
+    s.toastPosition = std::min<int>(D(L"ToastPosition", s.toastPosition), TOAST_POSITION_COUNT - 1);
+    s.toastCompact  = D(L"ToastCompact", s.toastCompact) != 0;
+    s.toastForText  = D(L"ToastForText", s.toastForText) != 0;
+    s.toastForImages = D(L"ToastForImages", s.toastForImages) != 0;
+    s.toastForFiles = D(L"ToastForFiles", s.toastForFiles) != 0;
+    s.toastForOther = D(L"ToastForOther", s.toastForOther) != 0;
     s.soundEnabled  = D(L"SoundEnabled", s.soundEnabled) != 0;
     s.soundKind     = std::min<int>(D(L"SoundKind", s.soundKind), SOUND_KIND_COUNT - 1);
     s.paused        = D(L"Paused", s.paused) != 0;
@@ -77,7 +86,13 @@ void SaveSettings() {
     D(L"Animate", s.animate);
     D(L"ToastEnabled", s.toastEnabled);
     D(L"ToastPreview", s.toastPreview);
-    D(L"ToastDuration", s.toastDuration);
+    D(L"ToastHold", s.toastDuration);
+    D(L"ToastPosition", s.toastPosition);
+    D(L"ToastCompact", s.toastCompact);
+    D(L"ToastForText", s.toastForText);
+    D(L"ToastForImages", s.toastForImages);
+    D(L"ToastForFiles", s.toastForFiles);
+    D(L"ToastForOther", s.toastForOther);
     D(L"SoundEnabled", s.soundEnabled);
     D(L"SoundKind", s.soundKind);
     D(L"Paused", s.paused);
@@ -184,8 +199,10 @@ static void UpdateEnables(HWND h) {
     for (int id : {IDC_FLASH_STYLE, IDC_FLASH_DURATION, IDC_COLOR_ACCENT, IDC_COLOR_CUSTOM, IDC_COLOR_SWATCH,
                    IDC_FLASH_ANIMATE, IDC_OPACITY, IDC_OPACITY_LABEL})
         Enable(h, id, s.flashEnabled);
-    Enable(h, IDC_TOAST_PREVIEW, s.toastEnabled);
-    Enable(h, IDC_TOAST_DURATION, s.toastEnabled);
+    for (int id : {IDC_TOAST_PREVIEW, IDC_TOAST_DURATION, IDC_TOAST_POS, IDC_TOAST_LAYOUT,
+                   IDC_TOAST_TEXT, IDC_TOAST_IMAGES, IDC_TOAST_FILES, IDC_TOAST_OTHER})
+        Enable(h, id, s.toastEnabled);
+    Enable(h, IDC_TOAST_PREVIEW, s.toastEnabled && !s.toastCompact);
     Enable(h, IDC_SOUND_KIND, s.soundEnabled);
     Enable(h, IDC_SOUND_PLAY, s.soundEnabled);
     Enable(h, IDC_SOUND_BROWSE, s.soundEnabled && s.soundKind == SOUND_CUSTOM);
@@ -208,8 +225,19 @@ static void InitDialog(HWND h) {
     for (const wchar_t* t : {L"Short", L"Normal", L"Long"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
     SendMessageW(cb, CB_SETCURSEL, s.flashDuration, 0);
     cb = GetDlgItem(h, IDC_TOAST_DURATION);
-    for (const wchar_t* t : {L"1.5 s", L"2.5 s", L"4 s", L"6 s"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
+    for (const wchar_t* t : {L"0.5 s", L"1.5 s", L"2.5 s", L"4 s", L"6 s"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
     SendMessageW(cb, CB_SETCURSEL, s.toastDuration, 0);
+    cb = GetDlgItem(h, IDC_TOAST_POS);
+    for (const wchar_t* t : {L"Near the window", L"Near the pointer", L"Bottom-right corner", L"Top-right corner"})
+        SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
+    SendMessageW(cb, CB_SETCURSEL, s.toastPosition, 0);
+    cb = GetDlgItem(h, IDC_TOAST_LAYOUT);
+    for (const wchar_t* t : {L"Detailed", L"Compact"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
+    SendMessageW(cb, CB_SETCURSEL, s.toastCompact ? 1 : 0, 0);
+    Check(h, IDC_TOAST_TEXT, s.toastForText);
+    Check(h, IDC_TOAST_IMAGES, s.toastForImages);
+    Check(h, IDC_TOAST_FILES, s.toastForFiles);
+    Check(h, IDC_TOAST_OTHER, s.toastForOther);
     cb = GetDlgItem(h, IDC_SOUND_KIND);
     for (const wchar_t* t : {L"Soft tick (built-in)", L"Windows notification", L"Custom WAV file..."})
         SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
@@ -270,6 +298,17 @@ static bool BrowseFile(HWND h, const wchar_t* filter, std::wstring& out) {
 
 static void PreviewFlash(HWND h) { if (g_settings.flashEnabled) Overlay_Flash(h); }
 
+static void PreviewToast(HWND h) {
+    ClipInfo ci;
+    ci.kind = CLIP_TEXT;
+    ci.snippet = L"This is where the toast appears with these settings.";
+    ci.charCount = ci.snippet.size();
+    ci.lineCount = 1;
+    ci.appName = APP_NAME;
+    RECT rc;
+    Toast_Show(ci, GetVisualRect(h, &rc) ? &rc : nullptr);
+}
+
 static INT_PTR CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     Settings& s = g_settings;
     switch (m) {
@@ -280,9 +319,14 @@ static INT_PTR CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         LoadIconMetric(g_hInst, MAKEINTRESOURCEW(IDI_APP), LIM_SMALL, &small);
         SendMessageW(h, WM_SETICON, ICON_BIG, (LPARAM)big);
         SendMessageW(h, WM_SETICON, ICON_SMALL, (LPARAM)small);
+        ApplyDarkTitleBar(h);
         InitDialog(h);
         return TRUE;
     }
+    case WM_SETTINGCHANGE:   // light/dark theme switched
+        ApplyDarkTitleBar(h);
+        InvalidateRect(GetDlgItem(h, IDC_COLOR_SWATCH), nullptr, TRUE);
+        return FALSE;
     case WM_APP_LASTSOURCE:
         RefreshIgnoreList();
         Check(h, IDC_AUTOSTART, IsAutostartEnabled());
@@ -348,6 +392,16 @@ static INT_PTR CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case IDC_TOAST_ENABLE: if (clicked) { s.toastEnabled = Checked(h, id); SaveSettings(); UpdateEnables(h); } break;
         case IDC_TOAST_PREVIEW: if (clicked) { s.toastPreview = Checked(h, id); SaveSettings(); } break;
         case IDC_TOAST_DURATION: if (sel) { s.toastDuration = (int)SendDlgItemMessageW(h, id, CB_GETCURSEL, 0, 0); SaveSettings(); } break;
+        case IDC_TOAST_POS:
+            if (sel) { s.toastPosition = (int)SendDlgItemMessageW(h, id, CB_GETCURSEL, 0, 0); SaveSettings(); PreviewToast(h); }
+            break;
+        case IDC_TOAST_LAYOUT:
+            if (sel) { s.toastCompact = SendDlgItemMessageW(h, id, CB_GETCURSEL, 0, 0) == 1; SaveSettings(); UpdateEnables(h); PreviewToast(h); }
+            break;
+        case IDC_TOAST_TEXT: if (clicked) { s.toastForText = Checked(h, id); SaveSettings(); } break;
+        case IDC_TOAST_IMAGES: if (clicked) { s.toastForImages = Checked(h, id); SaveSettings(); } break;
+        case IDC_TOAST_FILES: if (clicked) { s.toastForFiles = Checked(h, id); SaveSettings(); } break;
+        case IDC_TOAST_OTHER: if (clicked) { s.toastForOther = Checked(h, id); SaveSettings(); } break;
         case IDC_SOUND_ENABLE: if (clicked) { s.soundEnabled = Checked(h, id); SaveSettings(); UpdateEnables(h); } break;
         case IDC_SOUND_KIND:
             if (sel) {

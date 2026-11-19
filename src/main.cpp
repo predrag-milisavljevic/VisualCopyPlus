@@ -34,22 +34,77 @@ enum { IDM_SETTINGS = 100, IDM_PAUSE, IDM_IGNORE_LAST, IDM_AUTOSTART, IDM_EXIT }
 
 // ---------------------------------------------------------------- tray
 
-static void TrayUpdateTip() {
-    s_nid.uFlags = NIF_TIP | NIF_SHOWTIP;
+static HICON s_iconNormal, s_iconPaused;
+enum { HOTKEY_PAUSE = 1 };
+
+// Greyed-out, semi-transparent copy of an icon, shown in the tray while paused.
+static HICON MakeDimmedIcon(HICON src) {
+    ICONINFO ii{};
+    if (!src || !GetIconInfo(src, &ii)) return nullptr;
+    HICON result = nullptr;
+    BITMAP bm{};
+    if (ii.hbmColor && GetObject(ii.hbmColor, sizeof(bm), &bm)) {
+        int w = bm.bmWidth, h = bm.bmHeight;
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -h;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        HDC dc = GetDC(nullptr);
+        std::vector<DWORD> px((size_t)w * h);
+        if (GetDIBits(dc, ii.hbmColor, 0, h, px.data(), &bi, DIB_RGB_COLORS)) {
+            for (auto& p : px) {
+                DWORD a = p >> 24, r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+                DWORD y = (r * 30 + g * 59 + b * 11) / 100;
+                p = ((a * 50 / 100) << 24) | (y << 16) | (y << 8) | y;
+            }
+            void* bits = nullptr;
+            HBITMAP color = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+            if (color && bits) {
+                memcpy(bits, px.data(), px.size() * sizeof(DWORD));
+                ICONINFO ni = ii;
+                ni.hbmColor = color;
+                result = CreateIconIndirect(&ni);
+            }
+            if (color) DeleteObject(color);
+        }
+        ReleaseDC(nullptr, dc);
+    }
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    return result;
+}
+
+static void LoadTrayIcons() {
+    if (s_iconNormal) DestroyIcon(s_iconNormal);
+    if (s_iconPaused) DestroyIcon(s_iconPaused);
+    s_iconNormal = nullptr;
+    LoadIconMetric(g_hInst, MAKEINTRESOURCEW(IDI_APP), LIM_SMALL, &s_iconNormal);
+    s_iconPaused = MakeDimmedIcon(s_iconNormal);
+}
+
+static void TrayFillState() {
+    s_nid.hIcon = (g_settings.paused && s_iconPaused) ? s_iconPaused : s_iconNormal;
     wcscpy(s_nid.szTip, g_settings.paused ? APP_NAME L" (paused)" : APP_NAME);
+}
+
+static void TrayUpdateState() {
+    s_nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    TrayFillState();
     Shell_NotifyIconW(NIM_MODIFY, &s_nid);
 }
 
 static void TrayAdd() {
-    if (s_nid.hIcon) DestroyIcon(s_nid.hIcon);
+    LoadTrayIcons();
     s_nid = {};
     s_nid.cbSize = sizeof(s_nid);
     s_nid.hWnd = g_hwndMain;
     s_nid.uID = 1;
     s_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     s_nid.uCallbackMessage = WM_APP_TRAY;
-    LoadIconMetric(g_hInst, MAKEINTRESOURCEW(IDI_APP), LIM_SMALL, &s_nid.hIcon);
-    wcscpy(s_nid.szTip, g_settings.paused ? APP_NAME L" (paused)" : APP_NAME);
+    TrayFillState();
     Shell_NotifyIconW(NIM_ADD, &s_nid);
     s_nid.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &s_nid);
@@ -57,15 +112,28 @@ static void TrayAdd() {
 
 static void TrayRemove() {
     Shell_NotifyIconW(NIM_DELETE, &s_nid);
-    if (s_nid.hIcon) DestroyIcon(s_nid.hIcon);
-    s_nid.hIcon = nullptr;
+}
+
+void SetPaused(bool paused, bool announce) {
+    g_settings.paused = paused;
+    SaveSettings();
+    TrayUpdateState();
+    UpdateKeyHook();
+    if (HWND dlg = GetSettingsWindow()) PostMessageW(dlg, WM_APP_LASTSOURCE, 0, 0);
+    if (announce) {
+        ClipInfo ci;
+        ci.kind = CLIP_STATUS;
+        ci.formatName = paused ? APP_NAME L" paused" : APP_NAME L" resumed";
+        ci.snippet = PAUSE_HOTKEY_TEXT L" toggles";
+        Toast_Show(ci, nullptr);
+    }
 }
 
 static void ShowTrayMenu(int x, int y) {
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, IDM_SETTINGS, L"&Settings...");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING | (g_settings.paused ? MF_CHECKED : 0), IDM_PAUSE, L"&Pause");
+    AppendMenuW(m, MF_STRING | (g_settings.paused ? MF_CHECKED : 0), IDM_PAUSE, L"&Pause\t" PAUSE_HOTKEY_TEXT);
     std::wstring ign = g_lastSourceExe.empty() ? std::wstring(L"Ignore last source app")
                                                : L"Ignore copies from " + g_lastSourceExe;
     bool canIgnore = !g_lastSourceExe.empty() && !IsIgnored(g_lastSourceExe);
@@ -381,7 +449,15 @@ static void ProcessClipboard(HWND hwnd) {
     if (src && IsCandidateWindow(src) && !IsDesktopWindowClass(src)) haveAnchor = GetVisualRect(src, &anchor);
 
     if (g_settings.flashEnabled && src && (IsCandidateWindow(src) || IsDesktopWindowClass(src))) Overlay_Flash(src);
-    if (g_settings.toastEnabled) Toast_Show(ci, haveAnchor ? &anchor : nullptr);
+    bool toastForKind = true;
+    switch (ci.kind) {
+    case CLIP_TEXT:  toastForKind = g_settings.toastForText; break;
+    case CLIP_IMAGE: toastForKind = g_settings.toastForImages; break;
+    case CLIP_FILES: toastForKind = g_settings.toastForFiles; break;
+    case CLIP_OTHER: toastForKind = g_settings.toastForOther; break;
+    default: break;   // sensitive content is always announced (without a preview)
+    }
+    if (g_settings.toastEnabled && toastForKind) Toast_Show(ci, haveAnchor ? &anchor : nullptr);
     PlayCopySound();
 }
 
@@ -432,6 +508,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_hwndMain = hwnd;
         AddClipboardFormatListener(hwnd);
         TrayAdd();
+        RegisterHotKey(hwnd, HOTKEY_PAUSE, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'V');
+        return 0;
+
+    case WM_HOTKEY:
+        if (wp == HOTKEY_PAUSE) SetPaused(!g_settings.paused, true);
         return 0;
 
     case WM_CLIPBOARDUPDATE:
@@ -470,12 +551,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDM_SETTINGS: ShowSettingsWindow(); break;
-        case IDM_PAUSE:
-            g_settings.paused = !g_settings.paused;
-            SaveSettings();
-            TrayUpdateTip();
-            UpdateKeyHook();
-            break;
+        case IDM_PAUSE: SetPaused(!g_settings.paused, false); break;
         case IDM_IGNORE_LAST:
             if (!g_lastSourceExe.empty()) AddIgnored(g_lastSourceExe);
             break;
@@ -501,6 +577,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         RemoveClipboardFormatListener(hwnd);
         if (s_kbHook) { UnhookWindowsHookEx(s_kbHook); s_kbHook = nullptr; }
+        UnregisterHotKey(hwnd, HOTKEY_PAUSE);
         TrayRemove();
         if (HWND dlg = GetSettingsWindow()) DestroyWindow(dlg);
         PostQuitMessage(0);

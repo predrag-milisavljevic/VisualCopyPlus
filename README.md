@@ -4,6 +4,8 @@ A tiny Windows tray app (C++/Win32, single statically linked exe) that gives a v
 
 - **Flash** the window you copied from: Border, Glow, Fill, Corners, Top bar or Bottom bar; accent or custom color; opacity; duration; fade on/off.
 - **Toast** near that window showing what was copied: text snippet with character/line count, image thumbnail with size, or file names with count.
+  Position (near the window, near the pointer, bottom-right or top-right corner), detailed or compact layout, 0.5–6 s, and which content types get a toast.
+  Click the toast to open Windows clipboard history (Win+V); the × closes it.
   Content marked sensitive (`ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, `CanIncludeInClipboardHistory = 0`) is never previewed, and clearing the clipboard shows nothing.
 - **Smart behavior** (each optional):
   - says "cut" when Ctrl+X was used;
@@ -13,6 +15,7 @@ A tiny Windows tray app (C++/Win32, single statically linked exe) that gives a v
 - **Ignore list** per app, matched by the clipboard owner's process (`KeePassXC.exe`, ...).
 - Optional **sound** (built-in tick, Windows notification, or your own WAV).
 - Settings window, tray menu (pause, ignore last app, exit) and **Start with Windows**.
+- **Ctrl+Alt+Shift+V** pauses/resumes; the tray icon turns grey while paused.
 - Per-monitor DPI aware (PerMonitorV2).
 
 Settings are stored in `HKCU\Software\VisualCopyPlus`.
