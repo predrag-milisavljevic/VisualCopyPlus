@@ -45,6 +45,10 @@ void LoadSettings() {
     s.soundEnabled  = D(L"SoundEnabled", s.soundEnabled) != 0;
     s.soundKind     = std::min<int>(D(L"SoundKind", s.soundKind), SOUND_KIND_COUNT - 1);
     s.paused        = D(L"Paused", s.paused) != 0;
+    s.labelCut      = D(L"LabelCut", s.labelCut) != 0;
+    s.warnNoCopy    = D(L"WarnNoCopy", s.warnNoCopy) != 0;
+    s.quietFullscreen = D(L"QuietFullscreen", s.quietFullscreen) != 0;
+    s.skipRepeats   = D(L"SkipRepeats", s.skipRepeats) != 0;
     s.soundFile     = ReadString(k, L"SoundFile", RRF_RT_REG_SZ);
     while (!s.soundFile.empty() && s.soundFile.back() == 0) s.soundFile.pop_back();
 
@@ -77,6 +81,10 @@ void SaveSettings() {
     D(L"SoundEnabled", s.soundEnabled);
     D(L"SoundKind", s.soundKind);
     D(L"Paused", s.paused);
+    D(L"LabelCut", s.labelCut);
+    D(L"WarnNoCopy", s.warnNoCopy);
+    D(L"QuietFullscreen", s.quietFullscreen);
+    D(L"SkipRepeats", s.skipRepeats);
     RegSetValueExW(k, L"SoundFile", 0, REG_SZ, (const BYTE*)s.soundFile.c_str(),
                    (DWORD)((s.soundFile.size() + 1) * sizeof(wchar_t)));
     std::wstring multi;
@@ -193,7 +201,8 @@ static void UpdateOpacityLabel(HWND h) {
 static void InitDialog(HWND h) {
     const Settings& s = g_settings;
     HWND cb = GetDlgItem(h, IDC_FLASH_STYLE);
-    for (const wchar_t* t : {L"Border", L"Glow", L"Fill (tint)", L"Corners"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
+    for (const wchar_t* t : {L"Border", L"Glow", L"Fill (tint)", L"Corners", L"Top bar", L"Bottom bar"})
+        SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
     SendMessageW(cb, CB_SETCURSEL, s.flashStyle, 0);
     cb = GetDlgItem(h, IDC_FLASH_DURATION);
     for (const wchar_t* t : {L"Short", L"Normal", L"Long"}) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)t);
@@ -213,6 +222,10 @@ static void InitDialog(HWND h) {
     Check(h, IDC_TOAST_PREVIEW, s.toastPreview);
     Check(h, IDC_SOUND_ENABLE, s.soundEnabled);
     Check(h, IDC_AUTOSTART, IsAutostartEnabled());
+    Check(h, IDC_LABEL_CUT, s.labelCut);
+    Check(h, IDC_WARN_NOCOPY, s.warnNoCopy);
+    Check(h, IDC_QUIET_FULLSCREEN, s.quietFullscreen);
+    Check(h, IDC_SKIP_REPEATS, s.skipRepeats);
 
     HWND tb = GetDlgItem(h, IDC_OPACITY);
     SendMessageW(tb, TBM_SETRANGE, TRUE, MAKELPARAM(10, 100));
@@ -393,6 +406,10 @@ static INT_PTR CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (GetFocus() == GetDlgItem(h, IDC_IGNORE_EDIT)) AddFromEdit(h);
             break;
         case IDC_AUTOSTART: if (clicked) SetAutostart(Checked(h, id)); break;
+        case IDC_LABEL_CUT: if (clicked) { s.labelCut = Checked(h, id); SaveSettings(); UpdateKeyHook(); } break;
+        case IDC_WARN_NOCOPY: if (clicked) { s.warnNoCopy = Checked(h, id); SaveSettings(); UpdateKeyHook(); } break;
+        case IDC_QUIET_FULLSCREEN: if (clicked) { s.quietFullscreen = Checked(h, id); SaveSettings(); } break;
+        case IDC_SKIP_REPEATS: if (clicked) { s.skipRepeats = Checked(h, id); SaveSettings(); } break;
         case IDC_TEST: if (clicked) RunDemo(h); break;
         case IDCANCEL: DestroyWindow(h); break;
         }

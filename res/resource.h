@@ -27,6 +27,10 @@
 #define IDC_IGNORE_ADD          1022
 #define IDC_AUTOSTART           1023
 #define IDC_TEST                1024
+#define IDC_LABEL_CUT           1025
+#define IDC_WARN_NOCOPY         1026
+#define IDC_QUIET_FULLSCREEN    1027
+#define IDC_SKIP_REPEATS        1028
 
 #ifndef IDC_STATIC
 #define IDC_STATIC              -1

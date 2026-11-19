@@ -197,7 +197,8 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     const COLORREF fg     = dark ? RGB(255, 255, 255) : RGB(27, 27, 27);
     const COLORREF fg2    = dark ? RGB(168, 168, 168) : RGB(96, 96, 96);
     const COLORREF border = dark ? RGB(72, 72, 72) : RGB(214, 214, 214);
-    const COLORREF accent = GetFlashColor();
+    const COLORREF accent = ci.kind == CLIP_FAILED ? WARNING_COLOR : GetFlashColor();
+    const wchar_t* verb = ci.isCut ? L" cut" : L" copied";
     const COLORREF accentFg = dark ? MixColor(accent, RGB(255, 255, 255), 0.35f) : MixColor(accent, RGB(0, 0, 0), 0.12f);
     const COLORREF tile   = MixColor(bg, accent, dark ? 0.24f : 0.14f);
 
@@ -209,15 +210,15 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
     std::vector<std::wstring> fileLines;
     switch (ci.kind) {
     case CLIP_TEXT:
-        title = L"Text copied";
-        glyph = L"";
+        title = std::wstring(L"Text") + verb;
+        glyph = ci.isCut ? L"" : L"";
         meta = ci.charCount ? Plural(ci.charCount, L"character", L"characters") + L"  ·  " +
                                   Plural(ci.lineCount, L"line", L"lines")
                             : L"Empty text";
         break;
     case CLIP_IMAGE:
-        title = L"Image copied";
-        glyph = L"";
+        title = std::wstring(L"Image") + verb;
+        glyph = ci.isCut ? L"" : L"";
         meta = FormatNumber(ci.imgW) + L" × " + FormatNumber(ci.imgH) + L" px";
         break;
     case CLIP_FILES: {
@@ -226,7 +227,8 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         if (ci.typesKnown && ci.folderCount == 0) title = Plural(n, L"file", L"files");
         else if (ci.typesKnown && ci.plainFileCount == 0) title = Plural(n, L"folder", L"folders");
         else title = Plural(n, L"item", L"items");
-        title += L" copied";
+        title += verb;
+        if (ci.isCut) glyph = L"";
         if (ci.typesKnown && ci.folderCount && ci.plainFileCount)
             meta = Plural(ci.plainFileCount, L"file", L"files") + L", " + Plural(ci.folderCount, L"folder", L"folders");
         if (preview) {
@@ -236,14 +238,19 @@ void Toast_Show(const ClipInfo& ci, const RECT* anchorIn) {
         }
         break;
     }
+    case CLIP_FAILED:
+        title = ci.isCut ? L"Nothing was cut" : L"Nothing was copied";
+        glyph = L"";
+        meta = ci.isCut ? L"Ctrl+X didn't change the clipboard" : L"Ctrl+C didn't change the clipboard";
+        break;
     case CLIP_SENSITIVE:
-        title = L"Copied";
+        title = ci.isCut ? L"Cut" : L"Copied";
         glyph = L"";
         meta = L"Preview hidden (sensitive)";
         break;
     default:
-        title = L"Copied";
-        glyph = L"";
+        title = ci.isCut ? L"Cut" : L"Copied";
+        glyph = ci.isCut ? L"" : L"";
         meta = ci.formatName;
         break;
     }

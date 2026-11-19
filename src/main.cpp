@@ -15,7 +15,21 @@ static int s_openRetries;
 static UINT s_msgTaskbarCreated;
 static NOTIFYICONDATAW s_nid;
 
-enum { TIMER_CLIP = 1 };
+// copy-shortcut tracking (low-level keyboard hook)
+static HHOOK s_kbHook;
+static bool s_shortcutHeld;
+static ULONGLONG s_keyTime;      // when Ctrl+C / Ctrl+X was last pressed (0 = consumed)
+static bool s_keyCut;
+static DWORD s_keySeq;           // clipboard sequence number at the key press
+static HWND s_keyFg;
+static bool s_keyCheckPending;
+
+// repeat / burst suppression
+static unsigned long long s_lastHash;
+static ULONGLONG s_lastEventTime;
+static std::wstring s_lastEventExe;
+
+enum { TIMER_CLIP = 1, TIMER_KEYCHECK = 2 };
 enum { IDM_SETTINGS = 100, IDM_PAUSE, IDM_IGNORE_LAST, IDM_AUTOSTART, IDM_EXIT };
 
 // ---------------------------------------------------------------- tray
@@ -103,6 +117,53 @@ static HWND FindSourceWindow(DWORD ownerPid) {
     return ctx.found ? ctx.found : fg;
 }
 
+// ---------------------------------------------------------------- copy shortcuts
+
+// Only Ctrl+C, Ctrl+Insert and Ctrl+X are looked at; every other key passes straight through.
+static LRESULT CALLBACK KeyboardProc(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION) {
+        auto k = (const KBDLLHOOKSTRUCT*)lp;
+        DWORD vk = k->vkCode;
+        if (vk == 'C' || vk == 'X' || vk == VK_INSERT) {
+            if (wp == WM_KEYUP || wp == WM_SYSKEYUP) {
+                s_shortcutHeld = false;
+            } else if ((wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN) && !s_shortcutHeld) {
+                bool ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000;
+                bool alt = GetAsyncKeyState(VK_MENU) & 0x8000;
+                bool win = (GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000;
+                if (ctrl && !alt && !win) {
+                    s_shortcutHeld = true;
+                    // Read the sequence number now, before the target app has even seen the key.
+                    PostMessageW(g_hwndMain, WM_APP_COPYKEY, vk == 'X' ? 1 : 0, (LPARAM)GetClipboardSequenceNumber());
+                }
+            }
+        }
+    }
+    return CallNextHookEx(s_kbHook, code, wp, lp);
+}
+
+void UpdateKeyHook() {
+    bool need = !g_settings.paused && (g_settings.labelCut || g_settings.warnNoCopy);
+    if (need && !s_kbHook) s_kbHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardProc, g_hInst, 0);
+    else if (!need && s_kbHook) { UnhookWindowsHookEx(s_kbHook); s_kbHook = nullptr; }
+}
+
+// Full-screen app, D3D game or presentation mode.
+static bool IsQuietTime() {
+    QUERY_USER_NOTIFICATION_STATE st;
+    if (FAILED(SHQueryUserNotificationState(&st))) return false;
+    return st == QUNS_BUSY || st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE;
+}
+
+static unsigned long long Fnv(const void* data, size_t len, unsigned long long h = 1469598103934665603ULL) {
+    const BYTE* p = (const BYTE*)data;
+    // Large payloads (images) are sampled so hashing stays cheap.
+    size_t step = len > (1u << 20) ? len / (1u << 18) : 1;
+    for (size_t i = 0; i < len; i += step) { h ^= p[i]; h *= 1099511628211ULL; }
+    h ^= len; h *= 1099511628211ULL;
+    return h;
+}
+
 // ---------------------------------------------------------------- clipboard reading
 
 static std::wstring MakeSnippet(const wchar_t* p, size_t len) {
@@ -140,6 +201,7 @@ static void ReadText(ClipInfo& ci, const wchar_t* p, size_t len) {
     if (len > 0 && p[len - 1] == L'\n') ci.lineCount--;
     if (ci.lineCount == 0 && chars > 0) ci.lineCount = 1;
     ci.snippet = MakeSnippet(p, len);
+    ci.hash = Fnv(p, len * sizeof(wchar_t), 0x7465787400ULL);
 }
 
 static bool ReadDib(ClipInfo& ci, HANDLE h) {
@@ -157,6 +219,7 @@ static bool ReadDib(ClipInfo& ci, HANDLE h) {
             ci.kind = CLIP_IMAGE;
             ci.imgW = bih->biWidth;
             ci.imgH = bih->biHeight < 0 ? -bih->biHeight : bih->biHeight;
+            ci.hash = Fnv(p, size, 0x696D6700ULL);
             if (off < size && (bih->biCompression == BI_RGB || bih->biCompression == BI_BITFIELDS)) {
                 ci.dib.assign(p, p + size);
                 ci.dibBitsOffset = off;
@@ -194,6 +257,7 @@ static void ReadContent(ClipInfo& ci) {
                 std::wstring path(len + 1, L'\0');
                 DragQueryFileW(hd, i, &path[0], len + 1);
                 path.resize(len);
+                ci.hash = Fnv(path.data(), path.size() * sizeof(wchar_t), ci.hash ? ci.hash : 0x66696C6500ULL);
                 if (ci.files.size() < 4) ci.files.push_back(path);
                 // Avoid touching network paths (could block on offline shares).
                 if (path.size() > 1 && path[0] == L'\\' && path[1] == L'\\') { ci.typesKnown = false; continue; }
@@ -269,6 +333,10 @@ static void ProcessClipboard(HWND hwnd) {
     }
     if (IsIgnored(exe)) { s_lastSeq = seq; return; }
 
+    const ULONGLONG now = GetTickCount64();
+    const bool viaKey = s_keyTime && now - s_keyTime < 1500;
+    if (g_settings.quietFullscreen && IsQuietTime()) { s_lastSeq = seq; s_keyTime = 0; return; }
+
     // Sensitive markers. Per the docs, when ExcludeClipboardContentFromMonitorProcessing is
     // present a monitor should not read the content at all.
     bool sensitive = IsClipboardFormatAvailable(s_cfExclude) || IsClipboardFormatAvailable(s_cfViewerIgnore);
@@ -295,6 +363,17 @@ static void ProcessClipboard(HWND hwnd) {
     CloseClipboard();
     s_lastSeq = GetClipboardSequenceNumber();
 
+    // Background re-writes of the same content, or rapid bursts from one app, get no cue.
+    // A copy the user just made with the keyboard is always confirmed.
+    bool burst = now - s_lastEventTime < 350 && exe == s_lastEventExe;
+    bool repeat = ci.hash && ci.hash == s_lastHash && now - s_lastEventTime < 3000;
+    s_lastEventTime = now;
+    s_lastEventExe = exe;
+    s_lastHash = ci.hash;
+    if (!viaKey && g_settings.skipRepeats && (burst || repeat)) return;
+
+    ci.isCut = viaKey && s_keyCut && g_settings.labelCut;
+    s_keyTime = 0;
     ci.appName = GetFriendlyAppName(exePath);
 
     RECT anchor;
@@ -304,6 +383,33 @@ static void ProcessClipboard(HWND hwnd) {
     if (g_settings.flashEnabled && src && (IsCandidateWindow(src) || IsDesktopWindowClass(src))) Overlay_Flash(src);
     if (g_settings.toastEnabled) Toast_Show(ci, haveAnchor ? &anchor : nullptr);
     PlayCopySound();
+}
+
+// Runs ~650 ms after Ctrl+C / Ctrl+X: if the clipboard never changed, the copy didn't take.
+static void CheckFailedCopy() {
+    if (!s_keyCheckPending) return;
+    s_keyCheckPending = false;
+    if (GetClipboardSequenceNumber() != s_keySeq) return;
+    if (g_settings.paused || !g_settings.warnNoCopy) return;
+    if (g_settings.quietFullscreen && IsQuietTime()) return;
+    HWND fg = s_keyFg;
+    if (!fg || !IsWindow(fg)) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (pid == GetCurrentProcessId()) return;
+    std::wstring path = GetProcessExePath(pid);
+    if (IsIgnored(FileNameOf(path))) return;
+
+    ClipInfo ci;
+    ci.kind = CLIP_FAILED;
+    ci.isCut = s_keyCut;
+    ci.appName = GetFriendlyAppName(path);
+    const COLORREF warn = WARNING_COLOR;
+    bool visible = IsCandidateWindow(fg) && !IsDesktopWindowClass(fg);
+    if (g_settings.flashEnabled && visible) Overlay_Flash(fg, &warn);
+    RECT rc;
+    if (g_settings.toastEnabled) Toast_Show(ci, visible && GetVisualRect(fg, &rc) ? &rc : nullptr);
+    s_keyTime = 0;
 }
 
 void RunDemo(HWND target) {
@@ -335,7 +441,19 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         if (wp == TIMER_CLIP) { KillTimer(hwnd, TIMER_CLIP); ProcessClipboard(hwnd); }
+        else if (wp == TIMER_KEYCHECK) { KillTimer(hwnd, TIMER_KEYCHECK); CheckFailedCopy(); }
         return 0;
+
+    case WM_APP_COPYKEY: {
+        s_keyTime = GetTickCount64();
+        s_keyCut = wp != 0;
+        s_keySeq = (DWORD)lp;
+        HWND fg = GetForegroundWindow();
+        s_keyFg = fg ? GetAncestor(fg, GA_ROOT) : nullptr;
+        s_keyCheckPending = g_settings.warnNoCopy;
+        if (s_keyCheckPending) SetTimer(hwnd, TIMER_KEYCHECK, 650, nullptr);
+        return 0;
+    }
 
     case WM_APP_TRAY:
         switch (LOWORD(lp)) {
@@ -356,6 +474,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_settings.paused = !g_settings.paused;
             SaveSettings();
             TrayUpdateTip();
+            UpdateKeyHook();
             break;
         case IDM_IGNORE_LAST:
             if (!g_lastSourceExe.empty()) AddIgnored(g_lastSourceExe);
@@ -381,6 +500,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_DESTROY:
         RemoveClipboardFormatListener(hwnd);
+        if (s_kbHook) { UnhookWindowsHookEx(s_kbHook); s_kbHook = nullptr; }
         TrayRemove();
         if (HWND dlg = GetSettingsWindow()) DestroyWindow(dlg);
         PostQuitMessage(0);
@@ -431,6 +551,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     CreateWindowExW(WS_EX_TOOLWINDOW, MAIN_WND_CLASS, APP_NAME, WS_POPUP, 0, 0, 0, 0,
                     nullptr, nullptr, hInst, nullptr);
     if (!g_hwndMain) return 1;
+    UpdateKeyHook();
 
     if (g_firstRun) SaveSettings();
     if (wantSettings || g_firstRun) ShowSettingsWindow();

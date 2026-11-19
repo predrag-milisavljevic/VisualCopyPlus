@@ -79,6 +79,8 @@ static void Render(DWORD* bits, int w, int h, int style, COLORREF col, float s, 
     switch (style) {
     case FLASH_GLOW: band = 34.f * s; break;
     case FLASH_FILL: band = 3.f * s + 2; break;
+    case FLASH_TOPBAR:
+    case FLASH_BOTTOMBAR: band = 30.f * s; break;
     default:         band = thick + 2; break;
     }
     const float cornerLen = std::min(std::max(std::min(w, h) * 0.16f, 22.f * s), 90.f * s);
@@ -109,6 +111,15 @@ static void Render(DWORD* bits, int w, int h, int style, COLORREF col, float s, 
             v = inCorner ? Clamp01(thick - d + 0.5f) : 0;
             break;
         }
+        case FLASH_TOPBAR:
+        case FLASH_BOTTOMBAR: {
+            // Solid strip on one edge fading into the window, like a light bar.
+            float e = style == FLASH_TOPBAR ? y + 0.5f : h - (y + 0.5f);
+            float solid = 4.f * s;
+            float g = e < solid ? 1.f : 1.f - (e - solid) / (band - solid);
+            v = g > 0 ? g * g : 0;
+            break;
+        }
         }
         return v * cov;
     };
@@ -126,7 +137,7 @@ static void Render(DWORD* bits, int w, int h, int style, COLORREF col, float s, 
     }
 }
 
-void Overlay_Flash(HWND target) {
+void Overlay_Flash(HWND target, const COLORREF* overrideColor) {
     if (!target) return;
     RECT rc;
     HMONITOR mon = MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
@@ -167,7 +178,7 @@ void Overlay_Flash(HWND target) {
     if (!s_bmp || !bits) { if (s_bmp) DeleteObject(s_bmp); DeleteDC(s_dc); s_dc = nullptr; s_bmp = nullptr; return; }
     s_oldBmp = (HBITMAP)SelectObject(s_dc, s_bmp);
 
-    Render((DWORD*)bits, w, h, g_settings.flashStyle, GetFlashColor(), s, radius);
+    Render((DWORD*)bits, w, h, g_settings.flashStyle, overrideColor ? *overrideColor : GetFlashColor(), s, radius);
 
     s_peak = (BYTE)(std::min(100, std::max(10, g_settings.opacity)) * 255 / 100);
     s_anim = g_settings.animate;

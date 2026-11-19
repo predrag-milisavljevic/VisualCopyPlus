@@ -26,8 +26,10 @@
 #define WM_APP_SHOWSETTINGS  (WM_APP + 2)
 #define WM_APP_EXIT          (WM_APP + 3)
 #define WM_APP_LASTSOURCE    (WM_APP + 4)   // sent to the settings dialog
+#define WM_APP_COPYKEY       (WM_APP + 5)   // wParam: 1 = cut, 0 = copy; lParam: clipboard sequence at key press
 
-enum FlashStyle { FLASH_BORDER = 0, FLASH_GLOW, FLASH_FILL, FLASH_CORNERS, FLASH_STYLE_COUNT };
+// Values are persisted: append new styles at the end.
+enum FlashStyle { FLASH_BORDER = 0, FLASH_GLOW, FLASH_FILL, FLASH_CORNERS, FLASH_TOPBAR, FLASH_BOTTOMBAR, FLASH_STYLE_COUNT };
 enum SoundKind  { SOUND_TICK = 0, SOUND_SYSTEM, SOUND_CUSTOM, SOUND_KIND_COUNT };
 
 struct Settings {
@@ -46,12 +48,20 @@ struct Settings {
     std::wstring soundFile;
     std::vector<std::wstring> ignoreList;   // exe file names, case-insensitive
     bool paused         = false;
+    bool labelCut       = true;   // say "cut" when Ctrl+X was pressed
+    bool warnNoCopy     = true;   // warn when Ctrl+C / Ctrl+Insert left the clipboard unchanged
+    bool quietFullscreen = true;  // no cues while a full-screen app or presentation is running
+    bool skipRepeats    = true;   // ignore identical re-writes and bursts not triggered by a key press
 };
 
-enum ClipKind { CLIP_TEXT, CLIP_IMAGE, CLIP_FILES, CLIP_SENSITIVE, CLIP_OTHER };
+enum ClipKind { CLIP_TEXT, CLIP_IMAGE, CLIP_FILES, CLIP_SENSITIVE, CLIP_OTHER, CLIP_FAILED };
+
+#define WARNING_COLOR RGB(240, 120, 20)
 
 struct ClipInfo {
     ClipKind kind = CLIP_OTHER;
+    bool isCut = false;
+    unsigned long long hash = 0;   // content fingerprint, 0 = unknown
     // text
     std::wstring snippet;
     size_t charCount = 0, lineCount = 0;
@@ -89,9 +99,10 @@ void AddIgnored(const std::wstring& exe);
 
 // main.cpp
 void RunDemo(HWND target);
+void UpdateKeyHook();
 
 // overlay.cpp
-void Overlay_Flash(HWND target);
+void Overlay_Flash(HWND target, const COLORREF* overrideColor = nullptr);
 
 // toast.cpp
 void Toast_Show(const ClipInfo& info, const RECT* anchor);
